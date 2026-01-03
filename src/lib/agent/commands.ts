@@ -2,6 +2,9 @@
 
 import { Command } from './types';
 
+// Re-export Command for convenience
+export { Command } from './types';
+
 export function parseCommand(comment: string, agentMentioned: boolean): Command | null {
   if (!agentMentioned) {
     return null;
