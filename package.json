@@ -1,9 +1,12 @@
 {
   "name": "linear-agent-first-draft",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Linear agent that generates first drafts for copywriting and content tasks",
+  "main": "src/index.ts",
   "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
