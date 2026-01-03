@@ -42,6 +42,7 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
 
       if (command) {
         await handleCommand(command, sessionData, linearClient, env, workspaceId);
+        await linearClient.closeSession(sessionData.id);
         return;
       }
 
