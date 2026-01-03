@@ -1,0 +1,21 @@
+{
+  "name": "linear-agent-first-draft",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "http://local_proxy@127.0.0.1:35501/git/shaunakgokhale/linear-agent-first-draft"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260103.0",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.54.0"
+  }
+}
