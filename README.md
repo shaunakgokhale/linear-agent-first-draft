@@ -89,12 +89,15 @@ After deployment, Wrangler will show you your worker URL (e.g., `https://linear-
 
 ### 5. Install Agent in Linear
 
+**Important:** The agent will only respond to assignments **after** you complete this OAuth installation step. Until OAuth is completed, the agent cannot be assigned to issues.
+
 1. Visit your worker's authorization URL:
    ```
    https://your-worker.your-subdomain.workers.dev/oauth/authorize
    ```
 2. Click "Authorize" to install the agent in your Linear workspace
-3. The agent will now appear as an assignable user in Linear!
+3. The agent will be created as a dedicated user in your workspace (thanks to `actor=app` mode)
+4. The agent is now ready to be assigned to issues!
 
 ## Usage
 

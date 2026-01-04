@@ -29,6 +29,7 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
 
   if (!accessToken) {
     console.error('No access token found for workspace:', workspaceId);
+    console.error('Please complete the OAuth installation flow to enable the agent in this workspace.');
     return;
   }
 
