@@ -36,6 +36,14 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
   const linearClient = new LinearClient(accessToken);
 
   try {
+    // CRITICAL: Emit acknowledgment immediately (within 10 seconds requirement)
+    // This must happen before any validation checks or the agent will appear unresponsive
+    await linearClient.createAgentActivity(
+      sessionData.id,
+      'thought',
+      'Analyzing context...'
+    );
+
     // Check if this is a command (from a comment)
     if (sessionData.comment) {
       const mentioned = isAgentMentioned(sessionData.comment.body);
@@ -78,13 +86,6 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
       await linearClient.closeSession(sessionData.id);
       return;
     }
-
-    // Emit acknowledgment thought
-    await linearClient.createAgentActivity(
-      sessionData.id,
-      'thought',
-      'Analyzing context...'
-    );
 
     // Move issue to "started" if not already
     if (issue.state.type !== 'started' && issue.state.type !== 'completed' && issue.state.type !== 'canceled') {

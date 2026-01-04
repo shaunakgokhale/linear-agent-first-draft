@@ -126,7 +126,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       const event: LinearWebhookEvent = JSON.parse(body);
 
       // Handle agent session events
-      if (event.type === 'AgentSession' && event.action === 'create') {
+      if (event.type === 'AgentSession' && event.action === 'created') {
         // Process asynchronously (don't wait for completion)
         handleAgentSession(event, env).catch(error => {
           console.error('Agent session handler error:', error);
@@ -141,7 +141,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
     // No signature verification - parse directly
     const event: LinearWebhookEvent = await request.json();
 
-    if (event.type === 'AgentSession' && event.action === 'create') {
+    if (event.type === 'AgentSession' && event.action === 'created') {
       handleAgentSession(event, env).catch(error => {
         console.error('Agent session handler error:', error);
       });
