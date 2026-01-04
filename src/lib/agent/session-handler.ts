@@ -20,16 +20,15 @@ import {
 import { Template, AgentContext } from './types';
 
 export async function handleAgentSession(event: LinearWebhookEvent, env: Env): Promise<void> {
-  const sessionData = event.data;
-  const workspaceId = event.workspaceId;
+  const sessionData = event.agentSession;
+  const workspaceId = event.organizationId;
 
   // Get access token
   const { getAccessToken } = await import('../linear/oauth');
   const accessToken = await getAccessToken(env, workspaceId);
 
   if (!accessToken) {
-    console.error('No access token found for workspace:', workspaceId);
-    console.error('Please complete the OAuth installation flow to enable the agent in this workspace.');
+    console.error('No access token for workspace:', workspaceId);
     return;
   }
 
@@ -37,7 +36,6 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
 
   try {
     // CRITICAL: Emit acknowledgment immediately (within 10 seconds requirement)
-    // This must happen before any validation checks or the agent will appear unresponsive
     await linearClient.createAgentActivity(
       sessionData.id,
       'thought',
@@ -51,7 +49,6 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
 
       if (command) {
         await handleCommand(command, sessionData, linearClient, env, workspaceId);
-        await linearClient.closeSession(sessionData.id);
         return;
       }
 
@@ -72,7 +69,6 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
         'error',
         OUT_OF_SCOPE_MESSAGE
       );
-      await linearClient.closeSession(sessionData.id);
       return;
     }
 
@@ -83,7 +79,6 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
         'elicitation',
         INSUFFICIENT_CONTEXT_MESSAGE
       );
-      await linearClient.closeSession(sessionData.id);
       return;
     }
 
@@ -164,9 +159,7 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
       'response',
       result.responseContent
     );
-
-    // Close session
-    await linearClient.closeSession(sessionData.id);
+    // Session closes automatically after response activity
   } catch (error) {
     console.error('Session handler error:', error);
 
@@ -176,8 +169,6 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
       'error',
       "I ran into an issue generating the draft. Please re-assign me to try again."
     );
-
-    await linearClient.closeSession(sessionData.id);
   }
 }
 

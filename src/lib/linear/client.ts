@@ -21,14 +21,11 @@ export class LinearClient {
       body: JSON.stringify({ query, variables }),
     });
 
-    if (!response.ok) {
-      throw new Error(`Linear API error: ${response.status} ${response.statusText}`);
-    }
-
     const json = await response.json();
-
-    if (json.errors) {
-      throw new Error(`Linear GraphQL error: ${JSON.stringify(json.errors)}`);
+    
+    if (!response.ok || json.errors) {
+      console.error('Linear API error:', JSON.stringify(json.errors || json));
+      throw new Error(`Linear API error: ${response.status} - ${JSON.stringify(json.errors)}`);
     }
 
     return json.data;
@@ -116,29 +113,27 @@ export class LinearClient {
 
   async createAgentActivity(
     sessionId: string,
-    type: 'thought' | 'response' | 'elicitation' | 'error',
-    content: string
+    activityType: 'thought' | 'response' | 'elicitation' | 'error',
+    body: string
   ): Promise<void> {
+    // Content must be a JSONObject with "type" and "body" fields
+    const content = { type: activityType, body };
+    
     await this.query(`
       mutation CreateActivity(
         $sessionId: String!
-        $type: String!
-        $content: String!
+        $content: JSONObject!
       ) {
         agentActivityCreate(
           input: {
             agentSessionId: $sessionId
-            type: $type
             content: $content
           }
         ) {
           success
-          activity {
-            id
-          }
         }
       }
-    `, { sessionId, type, content });
+    `, { sessionId, content });
   }
 
   async updateIssueState(issueId: string, stateId: string): Promise<void> {
@@ -171,14 +166,14 @@ export class LinearClient {
 
   async closeSession(sessionId: string): Promise<void> {
     await this.query(`
-      mutation CloseSession($sessionId: String!) {
+      mutation CloseSession($sessionId: String!, $status: AgentSessionStatus!) {
         agentSessionUpdate(
           id: $sessionId
-          input: { status: closed }
+          input: { status: $status }
         ) {
           success
         }
       }
-    `, { sessionId });
+    `, { sessionId, status: 'closed' });
   }
 }

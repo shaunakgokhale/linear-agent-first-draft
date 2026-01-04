@@ -6,7 +6,7 @@ import { handleOAuthAuthorize, handleOAuthCallback } from './lib/linear/oauth';
 import { handleAgentSession } from './lib/agent/session-handler';
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
     // Route handling
@@ -19,7 +19,12 @@ export default {
     }
 
     if (url.pathname === '/webhook' && request.method === 'POST') {
-      return handleWebhook(request, env);
+      return handleWebhook(request, env, ctx);
+    }
+
+    // Debug endpoint to verify OAuth tokens are stored correctly
+    if (url.pathname === '/debug' && request.method === 'GET') {
+      return handleDebug(env);
     }
 
     if (url.pathname === '/' && request.method === 'GET') {
@@ -104,7 +109,7 @@ export default {
   },
 };
 
-async function handleWebhook(request: Request, env: Env): Promise<Response> {
+async function handleWebhook(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   try {
     // Verify webhook signature (optional but recommended)
     const signature = request.headers.get('linear-signature');
@@ -126,11 +131,14 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       const event: LinearWebhookEvent = JSON.parse(body);
 
       // Handle agent session events
-      if (event.type === 'AgentSession' && event.action === 'created') {
-        // Process asynchronously (don't wait for completion)
-        handleAgentSession(event, env).catch(error => {
-          console.error('Agent session handler error:', error);
-        });
+      if (event.type === 'AgentSessionEvent' && event.action === 'created') {
+        // Use waitUntil to keep the worker alive while processing
+        // This is CRITICAL - without it, the worker terminates before the agent can respond
+        ctx.waitUntil(
+          handleAgentSession(event, env).catch(error => {
+            console.error('Agent session handler error:', error);
+          })
+        );
 
         return new Response('OK', { status: 200 });
       }
@@ -141,10 +149,13 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
     // No signature verification - parse directly
     const event: LinearWebhookEvent = await request.json();
 
-    if (event.type === 'AgentSession' && event.action === 'created') {
-      handleAgentSession(event, env).catch(error => {
-        console.error('Agent session handler error:', error);
-      });
+    if (event.type === 'AgentSessionEvent' && event.action === 'created') {
+      // Use waitUntil to keep the worker alive while processing
+      ctx.waitUntil(
+        handleAgentSession(event, env).catch(error => {
+          console.error('Agent session handler error:', error);
+        })
+      );
 
       return new Response('OK', { status: 200 });
     }
@@ -187,4 +198,56 @@ function hexToBuffer(hex: string): ArrayBuffer {
     bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
   }
   return bytes.buffer;
+}
+
+async function handleDebug(env: Env): Promise<Response> {
+  try {
+    // List all token keys in KV
+    const tokenKeys = await env.MEMORY.list({ prefix: 'token:' });
+    
+    const tokens: { key: string; hasValue: boolean; createdAt?: number }[] = [];
+    
+    for (const key of tokenKeys.keys) {
+      const value = await env.MEMORY.get(key.name);
+      if (value) {
+        const parsed = JSON.parse(value);
+        tokens.push({
+          key: key.name,
+          hasValue: true,
+          createdAt: parsed.createdAt,
+        });
+      } else {
+        tokens.push({
+          key: key.name,
+          hasValue: false,
+        });
+      }
+    }
+
+    return new Response(
+      JSON.stringify({
+        status: 'ok',
+        tokenCount: tokens.length,
+        tokens: tokens,
+        message: tokens.length === 0 
+          ? 'No tokens found. Please complete OAuth flow at /oauth/authorize'
+          : 'Tokens found. If agent still not working, check that workspaceId in webhook matches token key.',
+      }, null, 2),
+      {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }
+    );
+  } catch (error) {
+    return new Response(
+      JSON.stringify({
+        status: 'error',
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }, null, 2),
+      {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      }
+    );
+  }
 }

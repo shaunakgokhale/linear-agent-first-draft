@@ -3,8 +3,11 @@
 export interface LinearWebhookEvent {
   action: string;
   type: string;
-  data: AgentSessionData;
-  workspaceId: string;
+  organizationId: string;
+  agentSession: AgentSessionData;
+  previousComments: CommentData[] | null;
+  guidance: string | null;
+  promptContext: string | null;
 }
 
 export interface AgentSessionData {
@@ -12,22 +15,26 @@ export interface AgentSessionData {
   status: string;
   issue: IssueData;
   comment: CommentData | null;
-  previousComments: CommentData[];
-  guidance: string | null;
+  issueId: string;
+  commentId: string | null;
 }
 
 export interface IssueData {
   id: string;
   title: string;
-  description: string;
-  state: {
-    id: string;
-    name: string;
-    type: string;
-  };
+  description?: string;
+  identifier: string;
+  url: string;
+  teamId: string;
   team: {
     id: string;
     key: string;
+    name: string;
+  };
+  state?: {
+    id: string;
+    name: string;
+    type: string;
   };
   project?: {
     id: string;
@@ -39,12 +46,13 @@ export interface IssueData {
 export interface CommentData {
   id: string;
   body: string;
-  user: {
+  issueId?: string;
+  user?: {
     id: string;
     name: string;
     isMe: boolean;
   };
-  createdAt: string;
+  createdAt?: string;
 }
 
 export interface AttachmentData {
