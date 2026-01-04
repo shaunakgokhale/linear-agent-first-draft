@@ -41,7 +41,7 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
     await linearClient.createAgentActivity(
       sessionData.id,
       'thought',
-      'Analyzing context...'
+      'Let me have a look at the issue'
     );
 
     // Check if this is a command (from a comment)
