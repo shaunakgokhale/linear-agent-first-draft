@@ -120,4 +120,33 @@ export class MistralClient {
       throw error;
     }
   }
+
+  /**
+   * Parse JSON response from LLM, handling markdown code blocks
+   */
+  static parseJsonResponse(response: string): any {
+    let jsonStr = response.trim();
+    
+    // Remove markdown code blocks if present
+    if (jsonStr.includes('```json')) {
+      jsonStr = jsonStr.split('```json')[1].split('```')[0].trim();
+    } else if (jsonStr.includes('```')) {
+      jsonStr = jsonStr.split('```')[1].split('```')[0].trim();
+    }
+    
+    return JSON.parse(jsonStr);
+  }
+
+  /**
+   * Generate content with structured JSON response
+   * Useful for planning and research phases
+   */
+  async generateStructuredContent(
+    systemPrompt: string,
+    userPrompt: string,
+    images?: ProcessedImage[]
+  ): Promise<any> {
+    const response = await this.generateContent(systemPrompt, userPrompt, images);
+    return MistralClient.parseJsonResponse(response);
+  }
 }

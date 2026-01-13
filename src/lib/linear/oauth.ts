@@ -62,6 +62,7 @@ export async function handleOAuthCallback(
       token_type: string;
       scope: string;
       expires_in?: number;
+      refresh_token?: string;
     }>();
 
     // Get workspace ID using the viewer query
@@ -85,8 +86,15 @@ export async function handleOAuthCallback(
       }),
     });
 
-    const viewerData = await viewerResponse.json<any>();
-    const workspaceId = viewerData.data.viewer.organization.id;
+    const viewerData = (await viewerResponse.json()) as any;
+    if (!viewerResponse.ok || viewerData?.errors) {
+      throw new Error(`Viewer query failed: ${JSON.stringify(viewerData?.errors || viewerData)}`);
+    }
+
+    const workspaceId = viewerData?.data?.viewer?.organization?.id;
+    if (!workspaceId || typeof workspaceId !== 'string') {
+      throw new Error(`Unable to determine workspaceId from viewer query: ${JSON.stringify(viewerData)}`);
+    }
 
     // Store token in KV
     const token: OAuthToken = {
@@ -96,6 +104,7 @@ export async function handleOAuthCallback(
       expiresAt: tokenData.expires_in
         ? Date.now() + tokenData.expires_in * 1000
         : undefined,
+      refreshToken: tokenData.refresh_token,
       createdAt: Date.now(),
     };
 
@@ -178,7 +187,46 @@ export async function getAccessToken(env: Env, workspaceId: string): Promise<str
 
   // Check if token is expired
   if (token.expiresAt && Date.now() > token.expiresAt) {
-    return null;
+    // Attempt refresh if we have a refresh token
+    if (!token.refreshToken) {
+      return null;
+    }
+
+    try {
+      const refreshResponse = await fetch(LINEAR_TOKEN_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({
+          grant_type: 'refresh_token',
+          refresh_token: token.refreshToken,
+          client_id: env.LINEAR_CLIENT_ID,
+          client_secret: env.LINEAR_CLIENT_SECRET,
+        }).toString(),
+      });
+
+      const refreshed = (await refreshResponse.json()) as any;
+      if (!refreshResponse.ok || refreshed?.errors) {
+        console.error('Token refresh failed:', JSON.stringify(refreshed?.errors || refreshed));
+        return null;
+      }
+
+      const newToken: OAuthToken = {
+        accessToken: refreshed.access_token,
+        tokenType: refreshed.token_type || token.tokenType,
+        scope: refreshed.scope || token.scope,
+        expiresAt: refreshed.expires_in ? Date.now() + refreshed.expires_in * 1000 : undefined,
+        refreshToken: refreshed.refresh_token || token.refreshToken,
+        createdAt: Date.now(),
+      };
+
+      await env.MEMORY.put(`token:${workspaceId}`, JSON.stringify(newToken));
+      return newToken.accessToken;
+    } catch (e) {
+      console.error('Token refresh exception:', e);
+      return null;
+    }
   }
 
   return token.accessToken;

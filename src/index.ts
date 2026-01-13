@@ -24,7 +24,7 @@ export default {
 
     // Debug endpoint to verify OAuth tokens are stored correctly
     if (url.pathname === '/debug' && request.method === 'GET') {
-      return handleDebug(env);
+      return handleDebug(request, env);
     }
 
     if (url.pathname === '/' && request.method === 'GET') {
@@ -78,11 +78,12 @@ export default {
             </p>
             <h2>Features</h2>
             <ul>
-              <li>12 content templates (social media, docs, UI copy, emails, etc.)</li>
+              <li>Intelligent content structure determination (LLM reasons about optimal output)</li>
+              <li>Multi-phase reasoning (planning → research → generation)</li>
               <li>Cross-issue memory for style preferences</li>
               <li>Image analysis for wireframes and mockups</li>
               <li>External link content fetching</li>
-              <li>Hybrid intelligence for context analysis</li>
+              <li>LLM-based context analysis and quality assessment</li>
             </ul>
             <h2>Setup</h2>
             <p>
@@ -173,19 +174,37 @@ async function verifyWebhookSignature(
   secret: string
 ): Promise<boolean> {
   try {
+    // Linear may send signatures in different formats depending on their docs/version.
+    // Common patterns in webhook providers are:
+    // - raw hex digest: "abcdef..."
+    // - prefixed hex: "sha256=abcdef..."
+    // - base64 digest (sometimes prefixed)
+    const normalizedSignature = normalizeWebhookSignature(signature);
+    if (!normalizedSignature) {
+      console.error('Webhook signature missing/invalid format');
+      return false;
+    }
+
     const encoder = new TextEncoder();
     const key = await crypto.subtle.importKey(
       'raw',
       encoder.encode(secret),
       { name: 'HMAC', hash: 'SHA-256' },
       false,
-      ['verify']
+      ['sign']
     );
 
-    const signatureBuffer = hexToBuffer(signature);
     const bodyBuffer = encoder.encode(body);
 
-    return await crypto.subtle.verify('HMAC', key, signatureBuffer, bodyBuffer);
+    const expected = new Uint8Array(await crypto.subtle.sign('HMAC', key, bodyBuffer));
+    const provided = decodeSignatureToBytes(normalizedSignature);
+
+    if (!provided) {
+      console.error('Unable to decode webhook signature:', normalizedSignature.slice(0, 12) + '…');
+      return false;
+    }
+
+    return timingSafeEqual(expected, provided);
   } catch (error) {
     console.error('Signature verification error:', error);
     return false;
@@ -200,21 +219,84 @@ function hexToBuffer(hex: string): ArrayBuffer {
   return bytes.buffer;
 }
 
-async function handleDebug(env: Env): Promise<Response> {
+function normalizeWebhookSignature(signatureHeader: string): string | null {
+  const raw = signatureHeader.trim();
+  if (!raw) return null;
+
+  // Strip common prefixes, e.g. "sha256=..." or "v1=..."
+  const parts = raw.split('=');
+  if (parts.length === 2 && parts[0].length <= 10) {
+    return parts[1].trim();
+  }
+
+  return raw;
+}
+
+function decodeSignatureToBytes(sig: string): Uint8Array | null {
+  const trimmed = sig.trim();
+  if (!trimmed) return null;
+
+  // hex-encoded (SHA-256 digest is 32 bytes => 64 hex chars)
+  const isHex = /^[0-9a-fA-F]+$/.test(trimmed) && trimmed.length % 2 === 0;
+  if (isHex) {
+    try {
+      return new Uint8Array(hexToBuffer(trimmed));
+    } catch {
+      // fall through
+    }
+  }
+
+  // base64-encoded
   try {
+    const bin = atob(trimmed);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) {
+      bytes[i] = bin.charCodeAt(i);
+    }
+    return bytes;
+  } catch {
+    return null;
+  }
+}
+
+function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a[i] ^ b[i];
+  }
+  return diff === 0;
+}
+
+async function handleDebug(request: Request, env: Env): Promise<Response> {
+  try {
+    const url = new URL(request.url);
+    const workspaceId = url.searchParams.get('workspaceId')?.trim() || null;
+
     // List all token keys in KV
     const tokenKeys = await env.MEMORY.list({ prefix: 'token:' });
     
-    const tokens: { key: string; hasValue: boolean; createdAt?: number }[] = [];
+    const tokens: {
+      key: string;
+      hasValue: boolean;
+      createdAt?: number;
+      expiresAt?: number;
+      isExpired?: boolean;
+      hasRefreshToken?: boolean;
+    }[] = [];
     
     for (const key of tokenKeys.keys) {
       const value = await env.MEMORY.get(key.name);
       if (value) {
         const parsed = JSON.parse(value);
+        const expiresAt = typeof parsed.expiresAt === 'number' ? parsed.expiresAt : undefined;
         tokens.push({
           key: key.name,
           hasValue: true,
           createdAt: parsed.createdAt,
+          expiresAt,
+          isExpired: expiresAt ? Date.now() > expiresAt : false,
+          hasRefreshToken: typeof parsed.refreshToken === 'string' && parsed.refreshToken.length > 0,
         });
       } else {
         tokens.push({
@@ -224,11 +306,32 @@ async function handleDebug(env: Env): Promise<Response> {
       }
     }
 
+    let expectedTokenLookup: any = null;
+    if (workspaceId) {
+      const expectedKey = `token:${workspaceId}`;
+      const tokenJson = await env.MEMORY.get(expectedKey);
+      if (!tokenJson) {
+        expectedTokenLookup = { workspaceId, expectedKey, found: false };
+      } else {
+        const token = JSON.parse(tokenJson);
+        const expiresAt = typeof token.expiresAt === 'number' ? token.expiresAt : undefined;
+        expectedTokenLookup = {
+          workspaceId,
+          expectedKey,
+          found: true,
+          createdAt: token.createdAt,
+          expiresAt,
+          isExpired: expiresAt ? Date.now() > expiresAt : false,
+        };
+      }
+    }
+
     return new Response(
       JSON.stringify({
         status: 'ok',
         tokenCount: tokens.length,
         tokens: tokens,
+        expectedTokenLookup,
         message: tokens.length === 0 
           ? 'No tokens found. Please complete OAuth flow at /oauth/authorize'
           : 'Tokens found. If agent still not working, check that workspaceId in webhook matches token key.',

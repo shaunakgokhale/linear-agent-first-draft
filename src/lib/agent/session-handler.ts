@@ -4,20 +4,20 @@ import { Env } from '../../types/env';
 import { LinearClient } from '../linear/client';
 import { LinearWebhookEvent, AgentSessionData } from '../linear/types';
 import { MistralClient } from '../mistral/client';
-import { buildSystemPrompt, buildUserPrompt, buildConciseAssumptions } from '../mistral/prompts';
+import { buildGenerationPrompt, buildConciseAssumptions } from '../mistral/prompts';
 import { processImages } from '../utils/image-processor';
 import { extractUrls, fetchExternalContent } from '../utils/link-fetcher';
 import { extractMemorySignals } from '../utils/signal-parser';
 import { loadMemory, updateMemory, clearMemory, formatMemoryForDisplay } from './memory';
 import { parseCommand, isAgentMentioned, Command } from './commands';
-import { detectTemplate, getArtifactList, getArtifactNames } from './templates';
 import {
-  isContextSufficient,
   isOutOfScope,
-  INSUFFICIENT_CONTEXT_MESSAGE,
   OUT_OF_SCOPE_MESSAGE,
 } from './intelligence';
-import { Template, AgentContext } from './types';
+import { analyzeContextSufficiency, generateElicitationQuestion } from './intelligence-llm';
+import { analyzeContext } from './planning';
+import { synthesizeContext } from './research';
+import { AgentContext, GenerationResult, ContentPlan, ResearchSummary } from './types';
 
 export async function handleAgentSession(event: LinearWebhookEvent, env: Env): Promise<void> {
   const sessionData = event.agentSession;
@@ -72,12 +72,35 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
       return;
     }
 
-    // Check if context is sufficient
-    if (!isContextSufficient(issue.description || '')) {
+    // Gather context for analysis
+    const memory = await loadMemory(env, workspaceId);
+    const minimalContext: AgentContext = {
+      issue: {
+        id: issue.id,
+        title: issue.title,
+        description: issue.description || '',
+        projectName: issue.project?.name || '',
+        projectDescription: issue.project?.description || '',
+        attachments: issue.attachments?.nodes || [],
+        comments: issue.comments?.nodes || [],
+        teamId: issue.team.id,
+        stateId: issue.state.id,
+      },
+      memory,
+      externalContent: [],
+      images: [],
+      sessionId: sessionData.id,
+      workspaceId,
+    };
+
+    // Check if context is sufficient using LLM-based analysis
+    const contextAnalysis = await analyzeContextSufficiency(minimalContext, env);
+    if (!contextAnalysis.isSufficient) {
+      const elicitationMessage = generateElicitationQuestion(contextAnalysis);
       await linearClient.createAgentActivity(
         sessionData.id,
         'elicitation',
-        INSUFFICIENT_CONTEXT_MESSAGE
+        elicitationMessage
       );
       return;
     }
@@ -93,9 +116,6 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
         await linearClient.updateIssueState(issue.id, startedState.id);
       }
     }
-
-    // Gather context
-    const memory = await loadMemory(env, workspaceId);
 
     // Process images
     const images = await processImages(issue.attachments?.nodes || [], env);
@@ -124,18 +144,38 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
       workspaceId,
     };
 
-    // Detect template
-    const template = detectTemplate(issue.title, issue.description || '');
+    // Phase 1: Planning - Determine content structure
+    await linearClient.createAgentActivity(
+      sessionData.id,
+      'thought',
+      'Analyzing the issue and planning the content structure...'
+    );
 
-    // Generate content
-    const result = await generateDraft(context, template, env);
+    const plan = await analyzeContext(context, env);
 
-    // Emit thought with assumptions
+    // Phase 2: Research - Synthesize context
+    await linearClient.createAgentActivity(
+      sessionData.id,
+      'thought',
+      'Gathering and synthesizing information...'
+    );
+
+    const research = await synthesizeContext(context, plan, env);
+
+    // Phase 3: Generation - Create content
+    await linearClient.createAgentActivity(
+      sessionData.id,
+      'thought',
+      'Generating content based on the plan...'
+    );
+
+    const result = await generateDraft(context, plan, research, env);
+
+    // Emit thought with reasoning and assumptions
     const thoughtContent = buildConciseAssumptions(
       context.issue.projectName,
-      template,
-      memory,
-      getArtifactNames(template)
+      plan,
+      memory
     );
 
     // Add notes about external content/images
@@ -174,31 +214,14 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
 
 async function generateDraft(
   context: AgentContext,
-  template: Template,
+  plan: ContentPlan,
+  research: ResearchSummary,
   env: Env
-): Promise<{ responseContent: string; templateUsed: Template }> {
+): Promise<GenerationResult> {
   const mistralClient = new MistralClient(env);
 
-  // Build external content summary
-  const externalContentText = context.externalContent
-    .filter(c => !c.error && c.content)
-    .map(c => {
-      const truncatedNote = c.truncated ? ' (truncated to first portion)' : '';
-      return `From ${c.url}${truncatedNote}:\n${c.content}`;
-    })
-    .join('\n\n');
-
-  // Build prompts
-  const systemPrompt = buildSystemPrompt(
-    context.memory,
-    context.issue.projectName,
-    context.issue.projectDescription,
-    externalContentText,
-    template,
-    getArtifactList(template)
-  );
-
-  const userPrompt = buildUserPrompt(context.issue.title, context.issue.description);
+  // Build generation prompts
+  const { systemPrompt, userPrompt } = buildGenerationPrompt(context, plan, research);
 
   // Generate content with Mistral
   const content = await mistralClient.generateContent(
@@ -209,7 +232,9 @@ async function generateDraft(
 
   return {
     responseContent: content,
-    templateUsed: template,
+    plan,
+    research,
+    thoughtContent: buildConciseAssumptions(context.issue.projectName, plan, context.memory),
   };
 }
 

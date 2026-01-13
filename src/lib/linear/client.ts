@@ -21,7 +21,8 @@ export class LinearClient {
       body: JSON.stringify({ query, variables }),
     });
 
-    const json = await response.json();
+    // `Response.json()` is `unknown` in newer TS/lib.dom versions.
+    const json = (await response.json()) as any;
     
     if (!response.ok || json.errors) {
       console.error('Linear API error:', JSON.stringify(json.errors || json));

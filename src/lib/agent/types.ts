@@ -1,19 +1,17 @@
 // Agent internal types
 
-export enum Template {
-  SocialMediaPost = 'social_media_post',
-  ProductPageUI = 'product_page_ui',
-  EmailCampaign = 'email_campaign',
-  LandingPage = 'landing_page',
-  BlogPost = 'blog_post',
-  ProductDocumentation = 'product_documentation',
-  APIDocumentation = 'api_documentation',
-  FeatureAnnouncement = 'feature_announcement',
-  ReleaseNotes = 'release_notes',
-  UIMicrocopy = 'ui_microcopy',
-  HelpCenterArticle = 'help_center_article',
-  VideoScript = 'video_script',
-  Generic = 'generic'
+// Planning phase result - LLM determines content structure
+export interface ContentPlan {
+  contentType: string; // e.g., "social media post", "documentation", "email campaign"
+  reasoning: string; // why this content type and structure makes sense
+  proposedStructure: {
+    sections: string[]; // list of sections/components
+    format: string; // description of format
+    organization: string; // how content should be organized
+  };
+  keyRequirements: string[]; // what needs to be addressed
+  approach: string; // generation strategy
+  considerations: string[]; // special notes
 }
 
 export interface AgentContext {
@@ -67,10 +65,20 @@ export interface FetchedContent {
   error?: string;
 }
 
+export interface ResearchSummary {
+  keyFacts: string[]; // extracted facts and details
+  toneIndicators: string[]; // tone and style indicators
+  audienceContext: string; // target audience information
+  contentRequirements: string[]; // what the content needs to accomplish
+  constraints: string[]; // limitations and preferences
+  synthesizedInfo: string; // overall synthesis of all sources
+}
+
 export interface GenerationResult {
   thoughtContent: string;
   responseContent: string;
-  templateUsed: Template;
+  plan: ContentPlan; // the plan used for generation
+  research: ResearchSummary; // the research summary used
 }
 
 export interface WorkspaceMemory {

@@ -39,5 +39,6 @@ export interface OAuthToken {
   tokenType: string;
   scope: string;
   expiresAt?: number;
+  refreshToken?: string;
   createdAt: number;
 }
