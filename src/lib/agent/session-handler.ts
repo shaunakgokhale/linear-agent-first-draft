@@ -8,6 +8,7 @@ import { buildGenerationPrompt, buildConciseAssumptions } from '../mistral/promp
 import { processImages } from '../utils/image-processor';
 import { extractUrls, fetchExternalContent } from '../utils/link-fetcher';
 import { extractMemorySignals } from '../utils/signal-parser';
+import { formatResponseForLinear } from '../utils/response-formatter';
 import { loadMemory, updateMemory, clearMemory, formatMemoryForDisplay } from './memory';
 import { parseCommand, isAgentMentioned, Command } from './commands';
 import {
@@ -15,13 +16,14 @@ import {
   OUT_OF_SCOPE_MESSAGE,
 } from './intelligence';
 import { analyzeContextSufficiency, generateElicitationQuestion } from './intelligence-llm';
-import { analyzeContext } from './planning';
-import { synthesizeContext } from './research';
+import { analyzeContextAndSynthesize } from './planning-research';
 import { AgentContext, GenerationResult, ContentPlan, ResearchSummary } from './types';
 
 export async function handleAgentSession(event: LinearWebhookEvent, env: Env): Promise<void> {
   const sessionData = event.agentSession;
   const workspaceId = event.organizationId;
+
+  console.log(`[Session Handler] Processing session ${sessionData.id}, action: ${event.action}, hasComment: ${!!sessionData.comment}`);
 
   // Get access token
   const { getAccessToken } = await import('../linear/oauth');
@@ -61,6 +63,8 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
 
     // Get full issue context
     const issue = await linearClient.getIssue(sessionData.issue.id);
+    
+    console.log(`[Session Handler] Issue ${issue.id}: title="${issue.title}", description length=${issue.description?.length || 0}, comments count=${issue.comments?.nodes?.length || 0}`);
 
     // Check if out of scope
     if (isOutOfScope(issue.title, issue.description || '')) {
@@ -74,17 +78,37 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
 
     // Gather context for analysis
     const memory = await loadMemory(env, workspaceId);
+    
+    // Filter out agent/system-generated comments to get actual user comments
+    const userComments = (issue.comments?.nodes || []).filter((comment: any) => {
+      const body = (comment.body || '').toLowerCase().trim();
+      // Filter out agent session thread headers and agent-generated content
+      return !body.startsWith('this thread is for an agent session') &&
+             !body.includes('connected first draft') &&
+             comment.user && 
+             comment.user.name && // Ensure user name exists
+             !comment.user.isMe; // Exclude comments from the agent itself
+    });
+    
+    console.log(`[Session Handler] Found ${userComments.length} user comments (out of ${issue.comments?.nodes?.length || 0} total)`);
+    if (userComments.length > 0) {
+      console.log(`[Session Handler] Latest user comment: ${userComments[userComments.length - 1].body.substring(0, 100)}...`);
+    }
+    
+    // Use original description - user comments will be included in context analysis
+    const enrichedDescription = issue.description || '';
+    
     const minimalContext: AgentContext = {
       issue: {
         id: issue.id,
         title: issue.title,
-        description: issue.description || '',
+        description: enrichedDescription,
         projectName: issue.project?.name || '',
         projectDescription: issue.project?.description || '',
         attachments: issue.attachments?.nodes || [],
         comments: issue.comments?.nodes || [],
         teamId: issue.team.id,
-        stateId: issue.state.id,
+        stateId: issue.state?.id || '',
       },
       memory,
       externalContent: [],
@@ -94,9 +118,13 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
     };
 
     // Check if context is sufficient using LLM-based analysis
+    console.log(`[Session Handler] Analyzing context sufficiency...`);
     const contextAnalysis = await analyzeContextSufficiency(minimalContext, env);
+    console.log(`[Session Handler] Context analysis: isSufficient=${contextAnalysis.isSufficient}, quality=${contextAnalysis.quality}`);
+    
     if (!contextAnalysis.isSufficient) {
       const elicitationMessage = generateElicitationQuestion(contextAnalysis);
+      console.log(`[Session Handler] Context insufficient, sending elicitation`);
       await linearClient.createAgentActivity(
         sessionData.id,
         'elicitation',
@@ -104,9 +132,12 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
       );
       return;
     }
+    
+    console.log(`[Session Handler] Context sufficient, proceeding with generation`);
+    const startTime = Date.now();
 
     // Move issue to "started" if not already
-    if (issue.state.type !== 'started' && issue.state.type !== 'completed' && issue.state.type !== 'canceled') {
+    if (issue.state && issue.state.type !== 'started' && issue.state.type !== 'completed' && issue.state.type !== 'canceled') {
       const states = await linearClient.getTeamStates(issue.team.id);
       const startedState = states
         .filter(s => s.type === 'started')
@@ -117,14 +148,17 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
       }
     }
 
-    // Process images
-    const images = await processImages(issue.attachments?.nodes || [], env);
-
-    // Fetch external links
+    // Process images and fetch external links in parallel (major optimization)
     const urls = extractUrls(issue.description || '');
-    const externalContent = await fetchExternalContent(urls, env);
+    const ioStartTime = Date.now();
+    const [images, externalContent] = await Promise.all([
+      processImages(issue.attachments?.nodes || [], env),
+      fetchExternalContent(urls, env)
+    ]);
+    const ioTime = Date.now() - ioStartTime;
+    console.log(`[Session Handler] Processed ${images.length} images and ${externalContent.length} external links in parallel (${ioTime}ms)`);
 
-    // Build context
+    // Build context (user comments are included separately in context analysis)
     const context: AgentContext = {
       issue: {
         id: issue.id,
@@ -135,7 +169,7 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
         attachments: issue.attachments?.nodes || [],
         comments: issue.comments?.nodes || [],
         teamId: issue.team.id,
-        stateId: issue.state.id,
+        stateId: issue.state?.id || '',
       },
       memory,
       externalContent,
@@ -144,23 +178,17 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
       workspaceId,
     };
 
-    // Phase 1: Planning - Determine content structure
+    // Combined Phase: Planning + Research (single LLM call for better performance)
     await linearClient.createAgentActivity(
       sessionData.id,
       'thought',
-      'Analyzing the issue and planning the content structure...'
+      'Analyzing the issue, planning content structure, and synthesizing information...'
     );
 
-    const plan = await analyzeContext(context, env);
-
-    // Phase 2: Research - Synthesize context
-    await linearClient.createAgentActivity(
-      sessionData.id,
-      'thought',
-      'Gathering and synthesizing information...'
-    );
-
-    const research = await synthesizeContext(context, plan, env);
+    const planningResearchStartTime = Date.now();
+    const { plan, research } = await analyzeContextAndSynthesize(context, env);
+    const planningResearchTime = Date.now() - planningResearchStartTime;
+    console.log(`[Session Handler] Planning+Research phase completed in ${planningResearchTime}ms`);
 
     // Phase 3: Generation - Create content
     await linearClient.createAgentActivity(
@@ -169,7 +197,13 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
       'Generating content based on the plan...'
     );
 
+    const generationStartTime = Date.now();
     const result = await generateDraft(context, plan, research, env);
+    const generationTime = Date.now() - generationStartTime;
+    console.log(`[Session Handler] Generation phase completed in ${generationTime}ms`);
+    
+    const totalTime = Date.now() - startTime;
+    console.log(`[Session Handler] Total generation time: ${totalTime}ms (IO: ${ioTime}ms, Planning+Research: ${planningResearchTime}ms, Generation: ${generationTime}ms)`);
 
     // Emit thought with reasoning and assumptions
     const thoughtContent = buildConciseAssumptions(
@@ -224,14 +258,17 @@ async function generateDraft(
   const { systemPrompt, userPrompt } = buildGenerationPrompt(context, plan, research);
 
   // Generate content with Mistral
-  const content = await mistralClient.generateContent(
+  const rawContent = await mistralClient.generateContent(
     systemPrompt,
     userPrompt,
     context.images.length > 0 ? context.images : undefined
   );
 
+  // Format and clean the response for Linear
+  const formattedContent = formatResponseForLinear(rawContent);
+
   return {
-    responseContent: content,
+    responseContent: formattedContent,
     plan,
     research,
     thoughtContent: buildConciseAssumptions(context.issue.projectName, plan, context.memory),

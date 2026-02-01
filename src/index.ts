@@ -114,6 +114,7 @@ async function handleWebhook(request: Request, env: Env, ctx: ExecutionContext):
   try {
     // Verify webhook signature (optional but recommended)
     const signature = request.headers.get('linear-signature');
+    let event: LinearWebhookEvent;
 
     if (env.LINEAR_WEBHOOK_SECRET && signature) {
       const body = await request.text();
@@ -129,41 +130,43 @@ async function handleWebhook(request: Request, env: Env, ctx: ExecutionContext):
       }
 
       // Parse the webhook event
-      const event: LinearWebhookEvent = JSON.parse(body);
-
-      // Handle agent session events
-      if (event.type === 'AgentSessionEvent' && event.action === 'created') {
-        // Use waitUntil to keep the worker alive while processing
-        // This is CRITICAL - without it, the worker terminates before the agent can respond
-        ctx.waitUntil(
-          handleAgentSession(event, env).catch(error => {
-            console.error('Agent session handler error:', error);
-          })
-        );
-
-        return new Response('OK', { status: 200 });
+      try {
+        event = JSON.parse(body);
+      } catch (parseError) {
+        console.error('Failed to parse webhook body:', parseError);
+        return new Response('Invalid JSON', { status: 400 });
       }
-
-      return new Response('Event type not supported', { status: 200 });
+    } else {
+      // No signature verification - parse directly
+      try {
+        event = await request.json();
+      } catch (parseError) {
+        console.error('Failed to parse webhook JSON:', parseError);
+        return new Response('Invalid JSON', { status: 400 });
+      }
     }
 
-    // No signature verification - parse directly
-    const event: LinearWebhookEvent = await request.json();
+    console.log(`[Webhook] Received event: type=${event.type}, action=${event.action}, organizationId=${event.organizationId}`);
 
-    if (event.type === 'AgentSessionEvent' && event.action === 'created') {
+    // Handle agent session events (created, updated, etc.)
+    if (event.type === 'AgentSessionEvent') {
+      console.log(`[Webhook] Processing AgentSessionEvent: action=${event.action}, sessionId=${event.agentSession?.id}, commentId=${event.agentSession?.commentId}, hasComment=${!!event.agentSession?.comment}`);
+      
       // Use waitUntil to keep the worker alive while processing
+      // This is CRITICAL - without it, the worker terminates before the agent can respond
       ctx.waitUntil(
         handleAgentSession(event, env).catch(error => {
-          console.error('Agent session handler error:', error);
+          console.error('[Webhook] Agent session handler error:', error);
         })
       );
 
       return new Response('OK', { status: 200 });
     }
 
+    console.log(`[Webhook] Unsupported event type: ${event.type}, action: ${event.action}`);
     return new Response('Event type not supported', { status: 200 });
   } catch (error) {
-    console.error('Webhook handler error:', error);
+    console.error('[Webhook] Handler error:', error);
     return new Response('Internal Server Error', { status: 500 });
   }
 }

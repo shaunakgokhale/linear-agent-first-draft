@@ -15,37 +15,42 @@ export async function fetchExternalContent(
   env: Env
 ): Promise<FetchedContent[]> {
   const maxSize = parseInt(env.MAX_LINK_FETCH_SIZE);
-  const results: FetchedContent[] = [];
 
-  for (const url of urls) {
+  // Process URLs in parallel with timeout protection
+  const fetchPromises = urls.map(async (url): Promise<FetchedContent> => {
     try {
+      // Add 5 second timeout per URL to prevent hanging
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      
       const response = await fetch(url, {
         headers: {
           'User-Agent': 'LinearFirstDraftAgent/1.0',
         },
+        signal: controller.signal,
       });
+      
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
-        results.push({
+        return {
           url,
           content: '',
           truncated: false,
           error: `HTTP ${response.status}`,
-        });
-        continue;
+        };
       }
 
       const contentType = response.headers.get('content-type') || '';
 
       // Only process text-based content
       if (!contentType.includes('text') && !contentType.includes('json')) {
-        results.push({
+        return {
           url,
           content: '',
           truncated: false,
           error: 'Non-text content type',
-        });
-        continue;
+        };
       }
 
       let text = await response.text();
@@ -64,22 +69,23 @@ export async function fetchExternalContent(
         truncated = true;
       }
 
-      results.push({
+      return {
         url,
         content: text,
         truncated,
-      });
+      };
     } catch (error) {
-      results.push({
+      return {
         url,
         content: '',
         truncated: false,
         error: error instanceof Error ? error.message : 'Fetch failed',
-      });
+      };
     }
-  }
+  });
 
-  return results;
+  // Wait for all fetches to complete in parallel
+  return Promise.all(fetchPromises);
 }
 
 function htmlToText(html: string): string {

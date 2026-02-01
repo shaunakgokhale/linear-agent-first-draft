@@ -36,14 +36,42 @@ Think about:
 - Could you generate something useful with what's provided?
 - What would make this better?
 
+IMPORTANT: Respond with valid JSON only. Escape all control characters (newlines, tabs, etc.) in string values using \\n, \\t, etc.
+Do not include any text before or after the JSON object.
+
 Respond with JSON:
 {
   "isSufficient": true/false,
   "quality": "high" | "medium" | "low",
   "missingInformation": ["item1", "item2"],
-  "elicitationQuestion": "question to ask if insufficient",
-  "reasoning": "why you made this assessment"
+  "elicitationQuestion": "question to ask if insufficient (escape newlines as \\n)",
+  "reasoning": "why you made this assessment (escape newlines as \\n)"
 }`;
+
+  // Filter out agent/system-generated comments and get user comments
+  const userComments = context.issue.comments.filter(comment => {
+    const body = (comment.body || '').toLowerCase().trim();
+    // Filter out agent session thread headers and agent-generated content
+    return !body.startsWith('this thread is for an agent session') &&
+           !body.includes('connected first draft') &&
+           comment.user && 
+           comment.user.name && // Ensure user name exists
+           !comment.user.isMe; // Exclude comments from the agent itself
+  });
+
+  console.log(`[Context Analysis] Analyzing ${userComments.length} user comments out of ${context.issue.comments.length} total comments`);
+
+  // Build comments text
+  let commentsText = '';
+  if (userComments.length > 0) {
+    const commentsContent = userComments
+      .map(c => `${c.user?.name || 'Unknown'}: ${c.body || ''}`)
+      .join('\n\n');
+    commentsText = '\n\nUser Comments:\n' + commentsContent;
+    console.log(`[Context Analysis] Including user comments: ${commentsContent.substring(0, 200)}...`);
+  } else {
+    console.log(`[Context Analysis] No user comments found after filtering`);
+  }
 
   const userPrompt = `Analyze this issue:
 
@@ -51,15 +79,14 @@ Title: ${context.issue.title}
 Description: ${context.issue.description || '(No description)'}
 Project: ${context.issue.projectName || 'N/A'}
 ${context.images.length > 0 ? `Images: ${context.images.length} attached` : ''}
-${context.externalContent.length > 0 ? `External links: ${context.externalContent.length} provided` : ''}
-${context.issue.comments.length > 0 ? `Comments: ${context.issue.comments.length} available` : ''}
+${context.externalContent.length > 0 ? `External links: ${context.externalContent.length} provided` : ''}${commentsText}
 
 Is there sufficient context to generate useful content?`;
 
   try {
     const response = await mistralClient.generateContent(systemPrompt, userPrompt);
 
-    // Parse JSON response
+    // Parse JSON response with better error handling
     let jsonStr = response.trim();
     if (jsonStr.includes('```json')) {
       jsonStr = jsonStr.split('```json')[1].split('```')[0].trim();
@@ -67,7 +94,31 @@ Is there sufficient context to generate useful content?`;
       jsonStr = jsonStr.split('```')[1].split('```')[0].trim();
     }
 
-    const analysis: ContextAnalysis = JSON.parse(jsonStr);
+    // Try to parse JSON, with fallback strategies for malformed JSON
+    let analysis: ContextAnalysis;
+    try {
+      analysis = JSON.parse(jsonStr);
+    } catch (parseError) {
+      console.log(`[Context Analysis] Initial JSON parse failed, attempting recovery. Error: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+      console.log(`[Context Analysis] JSON string preview: ${jsonStr.substring(0, 500)}...`);
+      
+      // Try to extract just the JSON object if there's extra text
+      const firstBrace = jsonStr.indexOf('{');
+      const lastBrace = jsonStr.lastIndexOf('}');
+      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+        const jsonObj = jsonStr.substring(firstBrace, lastBrace + 1);
+        try {
+          analysis = JSON.parse(jsonObj);
+          console.log(`[Context Analysis] Successfully parsed after extracting JSON object`);
+        } catch (secondError) {
+          console.log(`[Context Analysis] Second parse attempt failed: ${secondError instanceof Error ? secondError.message : String(secondError)}`);
+          // If still failing, log the problematic section and throw to use fallback
+          throw parseError;
+        }
+      } else {
+        throw parseError;
+      }
+    }
 
     // Validate and provide defaults
     return {
@@ -80,7 +131,7 @@ Is there sufficient context to generate useful content?`;
   } catch (error) {
     console.error('Failed to parse context analysis:', error);
     // Fallback to basic check
-    const hasDescription = context.issue.description && context.issue.description.trim().length >= 10;
+    const hasDescription = !!(context.issue.description && context.issue.description.trim().length >= 10);
     return {
       isSufficient: hasDescription,
       quality: hasDescription ? 'medium' : 'low',
@@ -105,4 +156,5 @@ export function generateElicitationQuestion(analysis: ContextAnalysis): string {
 
   return "Hey! I need a bit more info. What kind of draft are you looking for?";
 }
+
 

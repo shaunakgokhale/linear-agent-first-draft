@@ -166,17 +166,25 @@ Generate the content following the structure determined in the planning phase.
 - Use the exact sections and organization planned: ${plan.proposedStructure.sections.join(', ')}
 - Incorporate all relevant information from the research summary
 - Apply memory preferences and avoid anti-patterns
+- Be CONCISE - get to the point quickly, avoid filler words and unnecessary explanations
+- Keep it brief and actionable - users want the content, not commentary about it
 - Ensure the content is well-formatted, clear, and ready to use
-- Think step by step as you create each section
 - Make the content production-ready with minimal editing needed
 
 OUTPUT REQUIREMENTS:
-- Use clear markdown formatting
+- Use clean, well-structured Markdown formatting that renders beautifully in Linear
 - Follow the planned structure exactly: ${plan.proposedStructure.organization}
 - Include all planned sections: ${plan.proposedStructure.sections.join(', ')}
-- Format consistently throughout
-- Use appropriate markdown features (headers, lists, tables, code blocks) as needed
-- Make it professional, polished, and ready to use`;
+- Format consistently throughout with proper spacing and hierarchy
+- Use appropriate Markdown features (headers, bold, lists, tables) as needed
+- Be CONCISE and direct - avoid unnecessary verbosity or filler words
+- Keep paragraphs short (2-3 sentences max) for readability
+- Use headers (##) to clearly separate sections
+- Use bold (**text**) for emphasis on key points
+- Use bullet lists for multiple items
+- Remove any meta-commentary, thinking out loud, or explanations about the content
+- Output ONLY the final content - no introductions, no "here's what I created", no disclaimers
+- Make it professional, polished, and ready to use immediately`;
 
   const userPrompt = `Issue Title: ${context.issue.title}
 

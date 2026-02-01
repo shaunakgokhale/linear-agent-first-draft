@@ -44,10 +44,11 @@ export async function synthesizeContext(
     }
   }
 
-  // Comments
-  if (context.issue.comments.length > 0) {
-    const commentsText = context.issue.comments
-      .map(c => `${c.user.name}: ${c.body}`)
+  // Comments (filter out agent comments and ensure user exists)
+  const userComments = context.issue.comments.filter(c => c.user && c.user.name && !c.user.isMe);
+  if (userComments.length > 0) {
+    const commentsText = userComments
+      .map(c => `${c.user?.name || 'Unknown'}: ${c.body || ''}`)
       .join('\n\n');
     sources.push(`COMMENTS:\n${commentsText}`);
   }
@@ -158,4 +159,5 @@ function parseStructuredText(text: string): ResearchSummary {
 
   return summary;
 }
+
 
