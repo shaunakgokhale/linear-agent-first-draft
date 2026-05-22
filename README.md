@@ -246,6 +246,9 @@ src/
 - `MISTRAL_API_KEY` - From Mistral AI console
 - `WORKER_URL` - Your deployed worker URL
 
+**Optional (QA only, non-production):**
+- `FORCE_AGENT_SESSION_ERROR` - Set to `true` on the worker (Wrangler `[vars]` or the dashboard) so the next session fails on purpose right after the acknowledgement thought and emits Linear’s `error` activity. Remove or set to anything else for normal behavior.
+
 ## Cost Estimates
 
 With Mistral Large pricing ($0.5/M input tokens, $1.5/M output tokens):

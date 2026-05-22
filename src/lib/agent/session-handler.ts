@@ -19,6 +19,18 @@ import { analyzeContextSufficiency, generateElicitationQuestion } from './intell
 import { analyzeContextAndSynthesize } from './planning-research';
 import { AgentContext, GenerationResult, ContentPlan, ResearchSummary } from './types';
 
+async function emitSessionError(
+  linearClient: LinearClient,
+  sessionId: string,
+  message: string
+): Promise<void> {
+  try {
+    await linearClient.createAgentActivity(sessionId, 'error', message);
+  } catch (emitErr) {
+    console.error('Failed to emit error activity to Linear:', emitErr);
+  }
+}
+
 export async function handleAgentSession(event: LinearWebhookEvent, env: Env): Promise<void> {
   const sessionData = event.agentSession;
   const workspaceId = event.organizationId;
@@ -44,6 +56,10 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
       'Let me have a look at the issue'
     );
 
+    if (env.FORCE_AGENT_SESSION_ERROR === 'true') {
+      throw new Error('FORCE_AGENT_SESSION_ERROR is enabled (intentional session failure for testing)');
+    }
+
     // Check if this is a command (from a comment)
     if (sessionData.comment) {
       const mentioned = isAgentMentioned(sessionData.comment.body);
@@ -68,11 +84,7 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
 
     // Check if out of scope
     if (isOutOfScope(issue.title, issue.description || '')) {
-      await linearClient.createAgentActivity(
-        sessionData.id,
-        'error',
-        OUT_OF_SCOPE_MESSAGE
-      );
+      await emitSessionError(linearClient, sessionData.id, OUT_OF_SCOPE_MESSAGE);
       return;
     }
 
@@ -237,10 +249,9 @@ export async function handleAgentSession(event: LinearWebhookEvent, env: Env): P
   } catch (error) {
     console.error('Session handler error:', error);
 
-    // Emit error activity
-    await linearClient.createAgentActivity(
+    await emitSessionError(
+      linearClient,
       sessionData.id,
-      'error',
       "I ran into an issue generating the draft. Please re-assign me to try again."
     );
   }

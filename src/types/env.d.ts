@@ -18,6 +18,9 @@ export interface Env {
   MAX_LINK_FETCH_SIZE: string;
   MAX_IMAGE_SIZE: string;
   LINEAR_SCOPES: string;
+
+  /** When set to `"true"`, throws after the first acknowledgment so the session emits an error activity (QA / repro). */
+  FORCE_AGENT_SESSION_ERROR?: string;
 }
 
 // Memory stored in KV
